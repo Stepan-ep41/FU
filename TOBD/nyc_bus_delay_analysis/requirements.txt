@@ -1,0 +1,18 @@
+# Core Data & ETL
+pandas>=2.0.0
+dask[complete]>=2023.5.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Orchestration
+prefect>=2.0,<3.0  
+prefect-dask>=0.2.4
+
+# Visualization
+streamlit>=1.22.0
+plotly>=5.14.0
+folium
+streamlit-folium
+
+# Utilities
+python-dotenv

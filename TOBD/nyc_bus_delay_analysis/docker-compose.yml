@@ -1,0 +1,121 @@
+version: '3.9'
+
+services:
+  # -----------------------------
+  # 1. Database: PostgreSQL
+  # -----------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: nyc_bus_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - nyc_bus_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------
+  # 2. Orchestration: Prefect
+  # -----------------------------
+  prefect-server:
+    image: prefecthq/prefect:2-latest
+    container_name: nyc_bus_prefect_server
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+    environment:
+      PREFECT_UI_URL: http://localhost:4200/api
+    networks:
+      - nyc_bus_net
+
+  # Агент (или Worker в терминологии Prefect), который будет запускать Flow
+  prefect-agent:
+    build: .
+    container_name: nyc_bus_prefect_agent
+    command: prefect agent start -q 'default'
+    environment:
+      PREFECT_API_URL: ${PREFECT_API_URL}
+      # Передаем настройки базы для скриптов, которые запускает агент
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      DASK_SCHEDULER_ADDRESS: ${DASK_SCHEDULER_ADDRESS}
+    volumes:
+      - ./:/app # Монтируем код для горячей разработки
+      - ./data:/app/data # Доступ к CSV
+    depends_on:
+      - prefect-server
+      - postgres
+      - dask-scheduler
+    networks:
+      - nyc_bus_net
+
+  # -----------------------------
+  # 3. Computing: Dask Cluster
+  # -----------------------------
+  dask-scheduler:
+    build: .
+    container_name: nyc_bus_dask_scheduler
+    command: dask-scheduler
+    ports:
+      - "8786:8786" # RPC port
+      - "8787:8787" # Dashboard port
+    networks:
+      - nyc_bus_net
+
+  dask-worker:
+    build: .
+    command: dask-worker tcp://dask-scheduler:8786 --nthreads 2 --memory-limit 2GB
+    deploy:
+      replicas: 2 # Два воркера, как требовалось
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+    volumes:
+      - ./:/app
+      - ./data:/app/data # Воркеры ОБЯЗАНЫ видеть файлы данных
+    depends_on:
+      - dask-scheduler
+    networks:
+      - nyc_bus_net
+
+  # -----------------------------
+  # 4. Visualization: Streamlit
+  # -----------------------------
+  streamlit:
+    build: .
+    container_name: nyc_bus_dashboard
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_HOST: ${POSTGRES_HOST}
+    volumes:
+      - ./:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - nyc_bus_net
+
+networks:
+  nyc_bus_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
